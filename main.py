@@ -60,31 +60,41 @@ def fetch_massive_data(symbol: str) -> pd.DataFrame:
 # -----------------------------
 def run():
     print("🚀 Running Pairs Trading Analysis...")
+    print(f"API Key present: {API_KEY is not None}")
+    print(f"API Key length: {len(API_KEY) if API_KEY else 0}")
     
     for name, syms in PAIRS.items():
         try:
+            print(f"\n--- Processing {name} pair: {syms[0]} vs {syms[1]} ---")
+            
             # 1. Fetch Real Data
-            df_a, df_b = fetch_massive_data(syms[0]), fetch_massive_data(syms[1])
+            print(f"Fetching {syms[0]}...")
+            df_a = fetch_massive_data(syms[0])
+            print(f"✓ Got {len(df_a)} rows for {syms[0]}")
+            
+            print(f"Fetching {syms[1]}...")
+            df_b = fetch_massive_data(syms[1])
+            print(f"✓ Got {len(df_b)} rows for {syms[1]}")
+            
             df = pd.DataFrame({'A': df_a['Close'], 'B': df_b['Close']}).dropna()
-
+            print(f"Combined data: {len(df)} rows")
+            
             # 2. MATH IA: Cointegration
             _, p_val, _ = coint(df['A'], df['B'])
-
+            
             # 3. Spread Calculation
             ratio = df['A'].mean() / df['B'].mean()
             df['Spread'] = df['A'] - (ratio * df['B'])
             df['Z_Score'] = (df['Spread'] - df['Spread'].mean()) / df['Spread'].std()
-
+            
             # 4. CS EE: Machine Learning
             df['Target'] = np.where(df['Z_Score'].shift(-1) < df['Z_Score'], 1, 0)
             df = df.dropna()
             X_train, X_test, y_train, y_test = train_test_split(df[['Z_Score']], df['Target'], test_size=0.2, shuffle=False)
-
             model = xgb.XGBClassifier(eval_metric='logloss').fit(X_train, y_train)
             acc = accuracy_score(y_test, model.predict(X_test))
-
-            print(f"Pair: {name} | Coint p-value: {p_val:.4f} | ML Accuracy: {acc:.2%}")
-
+            print(f"✓ Pair: {name} | Coint p-value: {p_val:.4f} | ML Accuracy: {acc:.2%}")
+            
             # 5. Save Graphics
             plt.figure(figsize=(10, 4))
             plt.plot(df['Z_Score'], label='Z-Score', color='blue')
@@ -93,11 +103,12 @@ def run():
             plt.title(f"Mean Reversion Signal: {name}")
             plt.savefig(f"results/plots/{name}_zscore.png")
             plt.close()
-
+            print(f"✓ Saved plot: results/plots/{name}_zscore.png")
+            
             df.to_csv(f"results/data/{name}_results.csv")
+            print(f"✓ Saved data: results/data/{name}_results.csv")
         
         except Exception as e:
-            print(f"Error processing pair {name}: {e}")
-
-if __name__ == "__main__":
-    run()
+            print(f"❌ Error processing pair {name}: {e}")
+            import traceback
+            traceback.print_exc()
