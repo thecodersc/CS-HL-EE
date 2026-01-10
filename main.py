@@ -1,15 +1,3 @@
-"""
-CS HL EXTENDED ESSAY
-Machine Learning Enhancement of Pairs Trading Systems
-
-Research Question: To what extent does XGBoost enhance the predictive 
-power of statistical cointegration-based pairs trading compared to 
-traditional threshold approaches?
-
-Author: [Your Name]
-Date: January 2026
-"""
-
 import os
 import time
 import numpy as np
