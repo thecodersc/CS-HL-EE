@@ -1,0 +1,8 @@
+numpy
+pandas
+matplotlib
+xgboost
+scikit-learn
+statsmodels
+requests
+python-dotenv
