@@ -1,15 +1,3 @@
-"""
-CS HL EXTENDED ESSAY
-Machine Learning Enhancement of Pairs Trading Systems
-
-Research Question: To what extent does XGBoost enhance the predictive 
-power of statistical cointegration-based pairs trading compared to 
-traditional threshold approaches?
-
-Author: [Your Name]
-Date: January 2026
-"""
-
 import os
 import time
 import numpy as np
@@ -21,16 +9,24 @@ from statsmodels.tsa.stattools import coint
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import (accuracy_score, precision_score, recall_score, 
                             f1_score, confusion_matrix, classification_report)
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import yfinance as yf
 from datetime import datetime, timedelta
 import warnings
 
+# Visual setup
+plt.style.use('ggplot')
 warnings.filterwarnings('ignore')
 sns.set_style("whitegrid")
 
 # ============================================================================
+# -----------------------------
 # CONFIGURATION
 # ============================================================================
+# -----------------------------
+os.makedirs("results/plots", exist_ok=True)
+os.makedirs("results/data", exist_ok=True)
 
 class Config:
     """Configuration parameters for the analysis"""
@@ -75,10 +71,13 @@ class Config:
     PLOT_DIR = f"{OUTPUT_DIR}/plots"
     DATA_DIR = f"{OUTPUT_DIR}/data"
     REPORT_DIR = f"{OUTPUT_DIR}/reports"
+PAIRS = {"Energy": ["XOM", "CVX"], "Tech": ["NVDA", "AMD"]}
 
 # Create directories
 for directory in [Config.PLOT_DIR, Config.DATA_DIR, Config.REPORT_DIR]:
     os.makedirs(directory, exist_ok=True)
+END_DATE = datetime.today()
+START_DATE = END_DATE - timedelta(days=730)
 
 # ============================================================================
 # DATA ACQUISITION MODULE
@@ -86,7 +85,12 @@ for directory in [Config.PLOT_DIR, Config.DATA_DIR, Config.REPORT_DIR]:
 
 class DataFetcher:
     """Handles data download from Yahoo Finance"""
-    
+# -----------------------------
+# FUNCTION TO PULL DATA
+# -----------------------------
+def fetch_stock_data(symbol: str) -> pd.DataFrame:
+    print(f"  Downloading {symbol} data from Yahoo Finance...")
+
     @staticmethod
     def fetch_stock_data(symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
         """
@@ -103,18 +107,22 @@ class DataFetcher:
         print(f"    Fetching {symbol}...", end=" ")
         start_time = time.time()
         
+    try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(start=start, end=end)
-        
+        df = ticker.history(start=START_DATE, end=END_DATE)
+
         if df.empty:
             raise ValueError(f"No data returned for {symbol}")
-        
+            raise Exception(f"No data returned for {symbol}")
+
         df = df[['Close']].copy()
         df.index.name = 'Date'
-        
+
         elapsed = time.time() - start_time
         print(f"✓ {len(df)} days ({elapsed:.2f}s)")
         
+        print(f"  ✓ Downloaded {len(df)} trading days")
         return df
 
 # ============================================================================
@@ -146,7 +154,7 @@ class FeatureEngineer:
         df['Z_MA_5'] = df['Z_Score'].rolling(Config.MA_SHORT).mean()
         df['Z_MA_10'] = df['Z_Score'].rolling(Config.MA_MEDIUM).mean()
         df['Z_MA_20'] = df['Z_Score'].rolling(Config.MA_LONG).mean()
-        
+
         # Volatility
         df['Z_Volatility'] = df['Z_Score'].rolling(Config.VOLATILITY_WINDOW).std()
         
@@ -171,6 +179,8 @@ class FeatureEngineer:
                 'Z_Volatility', 'Z_Momentum', 'Z_ROC',
                 'Distance_MA20', 'Crossover_MA5_MA20',
                 'Extreme_High', 'Extreme_Low']
+    except Exception as e:
+        raise Exception(f"Error fetching {symbol}: {str(e)}")
 
 # ============================================================================
 # BASELINE STRATEGY MODULE
@@ -178,7 +188,18 @@ class FeatureEngineer:
 
 class BaselineStrategy:
     """Traditional statistical pairs trading strategy"""
-    
+# -----------------------------
+# FEATURE ENGINEERING
+# -----------------------------
+def create_features(df):
+    """
+    Create advanced features for ML model
+    """
+    # Rolling statistics
+    df['Z_MA_5'] = df['Z_Score'].rolling(5).mean()
+    df['Z_MA_10'] = df['Z_Score'].rolling(10).mean()
+    df['Z_MA_20'] = df['Z_Score'].rolling(20).mean()
+
     @staticmethod
     def apply(df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -215,11 +236,16 @@ class BaselineStrategy:
 
 class MLModel:
     """XGBoost-based enhanced trading model"""
-    
+    # Volatility
+    df['Z_Volatility'] = df['Z_Score'].rolling(10).std()
+
     def __init__(self):
         self.model = None
         self.feature_importance = None
-    
+    # Momentum indicators
+    df['Z_Momentum'] = df['Z_Score'] - df['Z_Score'].shift(5)
+    df['Z_ROC'] = df['Z_Score'].pct_change(5)  # Rate of change
+
     def train(self, X_train: pd.DataFrame, y_train: pd.Series, 
               scale_pos_weight: float = None):
         """
@@ -249,14 +275,21 @@ class MLModel:
             'Feature': X_train.columns,
             'Importance': self.model.feature_importances_
         }).sort_values('Importance', ascending=False)
-    
+    # Mean reversion indicators
+    df['Distance_MA20'] = df['Z_Score'] - df['Z_MA_20']
+    df['Crossover_MA5_MA20'] = (df['Z_MA_5'] > df['Z_MA_20']).astype(int)
+
     def predict(self, X_test: pd.DataFrame) -> np.ndarray:
         """Generate predictions"""
         return self.model.predict(X_test)
-    
+    # Extreme values
+    df['Extreme_High'] = (df['Z_Score'] > 2).astype(int)
+    df['Extreme_Low'] = (df['Z_Score'] < -2).astype(int)
+
     def get_feature_importance(self) -> pd.DataFrame:
         """Return feature importance DataFrame"""
         return self.feature_importance
+    return df
 
 # ============================================================================
 # EVALUATION MODULE
@@ -264,7 +297,17 @@ class MLModel:
 
 class PerformanceEvaluator:
     """Evaluates and compares model performance"""
-    
+# -----------------------------
+# IMPROVED BASELINE STRATEGY
+# -----------------------------
+def statistical_baseline_strategy(df):
+    """
+    Improved statistical strategy with dynamic thresholds
+    """
+    # Use rolling mean and std for adaptive thresholds
+    rolling_mean = df['Z_Score'].rolling(20).mean()
+    rolling_std = df['Z_Score'].rolling(20).std()
+
     @staticmethod
     def evaluate(y_true, y_pred, model_name: str) -> dict:
         """
@@ -282,7 +325,9 @@ class PerformanceEvaluator:
         }
         
         return metrics
-    
+    # Signals: Trade when Z-score is extreme relative to recent history
+    df['Stat_Signal'] = 0
+
     @staticmethod
     def print_metrics(metrics: dict):
         """Pretty print evaluation metrics"""
@@ -291,7 +336,10 @@ class PerformanceEvaluator:
         print(f"      Precision: {metrics['Precision']:.2%}")
         print(f"      Recall:    {metrics['Recall']:.2%}")
         print(f"      F1-Score:  {metrics['F1_Score']:.2%}")
-    
+    # More sophisticated: use percentiles for entry
+    upper_threshold = df['Z_Score'].rolling(60).quantile(0.85)
+    lower_threshold = df['Z_Score'].rolling(60).quantile(0.15)
+
     @staticmethod
     def calculate_improvement(baseline_acc: float, ml_acc: float) -> float:
         """Calculate percentage improvement"""
@@ -305,7 +353,9 @@ class PerformanceEvaluator:
 
 class Visualizer:
     """Creates comprehensive visualizations"""
-    
+    df.loc[df['Z_Score'] < lower_threshold, 'Stat_Signal'] = 1  # Buy
+    df.loc[df['Z_Score'] > upper_threshold, 'Stat_Signal'] = -1  # Sell
+
     @staticmethod
     def create_comprehensive_plot(pair_name: str, syms: list, df: pd.DataFrame,
                                  stat_metrics: dict, ml_metrics: dict,
@@ -413,15 +463,29 @@ class Visualizer:
 
 def run_analysis():
     """Main analysis pipeline"""
-    
+    # Target: Will spread mean-revert in next 3 days?
+    df['Stat_Target'] = np.where(
+        np.abs(df['Z_Score'].shift(-3)) < np.abs(df['Z_Score']), 1, 0
+    )
+
     print("="*80)
     print("CS HL EXTENDED ESSAY: ML ENHANCEMENT OF PAIRS TRADING")
     print("="*80)
     print(f"\nResearch Question: To what extent does XGBoost enhance")
     print(f"cointegration-based pairs trading?\n")
-    
+    return df
+
+# -----------------------------
+# MAIN FUNCTION
+# -----------------------------
+def run():
+    print("=" * 60)
+    print("PAIRS TRADING ANALYSIS: Statistical vs ML-Enhanced")
+    print("Research Question: Does XGBoost enhance cointegration trading?")
+    print("=" * 60)
+
     all_results = []
-    
+
     for pair_name, syms in Config.PAIRS.items():
         print(f"\n{'='*80}")
         print(f"ANALYZING {pair_name.upper()} PAIR: {syms[0]} vs {syms[1]}")
@@ -518,189 +582,313 @@ def run_analysis():
         
         # Evaluate
         evaluator = PerformanceEvaluator()
-        stat_metrics = evaluator.evaluate(y_test, y_pred_stat, "Statistical Baseline")
-        ml_metrics = evaluator.evaluate(y_test, y_pred_ml, "XGBoost Enhanced")
-        
-        evaluator.print_metrics(stat_metrics)
-        evaluator.print_metrics(ml_metrics)
-        
-        improvement = evaluator.calculate_improvement(
-            stat_metrics['Accuracy'], ml_metrics['Accuracy']
-        )
-        
-        print(f"\n    IMPROVEMENT: {improvement:+.2f}%")
-        print(f"    CONCLUSION: XGBoost {'ENHANCES' if improvement > 0 else 'DOES NOT ENHANCE'} the strategy")
-        
-        # ====================================================================
-        # PHASE 7: FEATURE IMPORTANCE ANALYSIS
-        # ====================================================================
-        print("\n[7] FEATURE IMPORTANCE")
-        feature_importance = ml_model.get_feature_importance()
-        
-        print("    Top 5 Features:")
-        for idx, row in feature_importance.head(5).iterrows():
-            print(f"      {idx+1}. {row['Feature']}: {row['Importance']:.4f}")
-        
-        # ====================================================================
-        # PHASE 8: SAVE RESULTS
-        # ====================================================================
-        print("\n[8] SAVING RESULTS")
-        
-        # Save comprehensive report
-        with open(f"{Config.REPORT_DIR}/{pair_name}_detailed_report.txt", 'w') as f:
-            f.write(f"CS HL EXTENDED ESSAY - DETAILED ANALYSIS REPORT\n")
-            f.write(f"Pair: {pair_name} ({syms[0]} vs {syms[1]})\n")
-            f.write("="*70 + "\n\n")
+        stat_metrics = evaluator.evaluate(y_test,
+    for name, syms in PAIRS.items():
+        try:
+            print(f"\n{'='*60}")
+            print(f"Processing {name} pair: {syms[0]} vs {syms[1]}")
+            print('='*60)
             
-            f.write("1. DATASET INFORMATION\n")
-            f.write(f"   Total observations: {len(df_clean)}\n")
-            f.write(f"   Training set: {len(train_data)} days\n")
-            f.write(f"   Test set: {len(test_data)} days\n\n")
+            # 1. Fetch Real Data
+            df_a = fetch_stock_data(syms[0])
+            df_b = fetch_stock_data(syms[1])
             
-            f.write("2. COINTEGRATION TEST\n")
-            f.write(f"   Test statistic: {score:.4f}\n")
-            f.write(f"   P-value: {p_val:.4f}\n")
-            f.write(f"   Cointegrated: {'Yes' if is_cointegrated else 'No'}\n\n")
+            df = pd.DataFrame({'A': df_a['Close'], 'B': df_b['Close']}).dropna()
+            print(f"\nCombined dataset: {len(df)} trading days")
             
-            f.write("3. BASELINE STATISTICAL STRATEGY\n")
-            f.write(f"   Accuracy:  {stat_metrics['Accuracy']:.2%}\n")
-            f.write(f"   Precision: {stat_metrics['Precision']:.2%}\n")
-            f.write(f"   Recall:    {stat_metrics['Recall']:.2%}\n")
-            f.write(f"   F1-Score:  {stat_metrics['F1_Score']:.2%}\n\n")
+            # 2. MATH IA: Cointegration Test
+            score, p_val, crit_values = coint(df['A'], df['B'])
+            is_cointegrated = p_val < 0.05
             
-            f.write("4. XGBOOST ENHANCED MODEL\n")
-            f.write(f"   Features used: {len(feature_cols)}\n")
-            f.write(f"   Accuracy:  {ml_metrics['Accuracy']:.2%}\n")
-            f.write(f"   Precision: {ml_metrics['Precision']:.2%}\n")
-            f.write(f"   Recall:    {ml_metrics['Recall']:.2%}\n")
-            f.write(f"   F1-Score:  {ml_metrics['F1_Score']:.2%}\n\n")
+            print(f"\n--- COINTEGRATION ANALYSIS ---")
+            print(f"Test Statistic: {score:.4f}")
+            print(f"P-value: {p_val:.4f}")
+            print(f"Critical values (1%, 5%, 10%): {crit_values}")
+            print(f"Cointegrated at 5% level: {'YES' if is_cointegrated else 'NO'}")
             
-            f.write("5. IMPROVEMENT ANALYSIS\n")
-            f.write(f"   Percentage improvement: {improvement:+.2f}%\n")
-            f.write(f"   Absolute accuracy gain: {ml_metrics['Accuracy'] - stat_metrics['Accuracy']:+.2%}\n\n")
+            # 3. Spread Calculation
+            ratio = df['A'].mean() / df['B'].mean()
+            df['Spread'] = df['A'] - (ratio * df['B'])
+            df['Z_Score'] = (df['Spread'] - df['Spread'].mean()) / df['Spread'].std()
             
-            f.write("6. FEATURE IMPORTANCE RANKING\n")
-            for idx, row in feature_importance.iterrows():
-                f.write(f"   {idx+1}. {row['Feature']:<20} {row['Importance']:.6f}\n")
+            print(f"\nSpread Statistics:")
+            print(f"  Mean: {df['Spread'].mean():.4f}")
+            print(f"  Std Dev: {df['Spread'].std():.4f}")
+            print(f"  Min Z-Score: {df['Z_Score'].min():.2f}")
+            print(f"  Max Z-Score: {df['Z_Score'].max():.2f}")
             
-            f.write("\n7. CONCLUSION\n")
-            f.write(f"   XGBoost {'successfully enhances' if improvement > 0 else 'does not enhance'}\n")
-            f.write(f"   the predictive power of the statistical baseline strategy.\n")
-            f.write(f"   Most important feature: {feature_importance.iloc[0]['Feature']}\n")
-        
-        # Save detailed test results
-        test_results = test_data.copy()
-        test_results['ML_Prediction'] = y_pred_ml
-        test_results['Stat_Prediction'] = y_pred_stat
-        test_results['Actual'] = y_test.values
-        test_results.to_csv(f"{Config.DATA_DIR}/{pair_name}_test_predictions.csv")
-        
-        # Save feature importance
-        feature_importance.to_csv(f"{Config.DATA_DIR}/{pair_name}_feature_importance.csv", index=False)
-        
-        # Create visualization
-        Visualizer.create_comprehensive_plot(
-            pair_name, syms, df_clean, stat_metrics, ml_metrics,
-            feature_importance, y_test, y_pred_stat, y_pred_ml, test_data
-        )
-        
-        print(f"    ✓ Report: {pair_name}_detailed_report.txt")
-        print(f"    ✓ Predictions: {pair_name}_test_predictions.csv")
-        print(f"    ✓ Feature importance: {pair_name}_feature_importance.csv")
-        print(f"    ✓ Visualization: {pair_name}_ml_analysis.png")
-        
-        # Store results
-        results = {
-            'Pair': pair_name,
-            'Stock_A': syms[0],
-            'Stock_B': syms[1],
-            'Data_Points': len(df_clean),
-            'Test_Size': len(test_data),
-            'Cointegration_P_Value': p_val,
-            'Is_Cointegrated': is_cointegrated,
-            'Baseline_Accuracy': stat_metrics['Accuracy'],
-            'Baseline_Precision': stat_metrics['Precision'],
-            'Baseline_F1': stat_metrics['F1_Score'],
-            'ML_Accuracy': ml_metrics['Accuracy'],
-            'ML_Precision': ml_metrics['Precision'],
-            'ML_F1': ml_metrics['F1_Score'],
-            'Improvement_Percent': improvement,
-            'Top_Feature': feature_importance.iloc[0]['Feature'],
-            'Top_Feature_Importance': feature_importance.iloc[0]['Importance']
-        }
-        all_results.append(results)
+            # 4. BASELINE: Statistical Strategy
+            df = statistical_baseline_strategy(df)
+            
+            # 5. Feature Engineering
+            df = create_features(df)
+            
+            # 6. Create better target: Profitable mean reversion
+            # Target = 1 if entering now would be profitable in 3-5 days
+            df['ML_Target'] = np.where(
+                (np.abs(df['Z_Score'].shift(-3)) < np.abs(df['Z_Score'])) & 
+                (np.abs(df['Z_Score'].shift(-5)) < np.abs(df['Z_Score'])), 
+                1, 0
+            )
+            
+            # Drop NaN rows created by feature engineering
+            df_clean = df.dropna()
+            
+            # Split data: 80% train, 20% test
+            split_idx = int(len(df_clean) * 0.8)
+            train_data = df_clean.iloc[:split_idx]
+            test_data = df_clean.iloc[split_idx:]
+            
+            print(f"\nDataset Split:")
+            print(f"  Training: {len(train_data)} days")
+            print(f"  Testing: {len(test_data)} days")
+            
+            # 7. Train XGBoost with MANY features
+            feature_cols = ['Z_Score', 'Z_MA_5', 'Z_MA_10', 'Z_MA_20', 
+                          'Z_Volatility', 'Z_Momentum', 'Z_ROC',
+                          'Distance_MA20', 'Crossover_MA5_MA20',
+                          'Extreme_High', 'Extreme_Low']
+            
+            X_train = train_data[feature_cols]
+            y_train = train_data['ML_Target']
+            X_test = test_data[feature_cols]
+            y_test = test_data['ML_Target']
+            
+            # Check class balance
+            class_balance = y_train.value_counts()
+            print(f"\nTraining Set Class Balance:")
+            print(f"  Class 0 (No Trade): {class_balance[0]}")
+            print(f"  Class 1 (Trade): {class_balance[1]}")
+            
+            # Calculate scale_pos_weight for imbalanced classes
+            scale_pos_weight = class_balance[0] / class_balance[1]
+            
+            model = xgb.XGBClassifier(
+                eval_metric='logloss',
+                max_depth=4,
+                learning_rate=0.05,
+                n_estimators=200,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42,
+                scale_pos_weight=scale_pos_weight  # Handle class imbalance
+            )
+            model.fit(X_train, y_train)
+            
+            # 8. Predictions
+            y_pred_ml = model.predict(X_test)
+            
+            # Statistical baseline predictions on test set
+            y_pred_stat = test_data['Stat_Signal'].apply(lambda x: 1 if x != 0 else 0)
+            
+            # 9. COMPARISON METRICS
+            ml_accuracy = accuracy_score(y_test, y_pred_ml)
+            ml_precision = precision_score(y_test, y_pred_ml, zero_division=0)
+            ml_recall = recall_score(y_test, y_pred_ml, zero_division=0)
+            ml_f1 = f1_score(y_test, y_pred_ml, zero_division=0)
+            
+            stat_accuracy = accuracy_score(y_test, y_pred_stat)
+            stat_precision = precision_score(y_test, y_pred_stat, zero_division=0)
+            stat_recall = recall_score(y_test, y_pred_stat, zero_division=0)
+            stat_f1 = f1_score(y_test, y_pred_stat, zero_division=0)
+            
+            improvement = ((ml_accuracy - stat_accuracy) / stat_accuracy * 100) if stat_accuracy > 0 else 0
+            
+            print(f"\n--- RESULTS COMPARISON ---")
+            print(f"\nSTATISTICAL BASELINE (Adaptive Thresholds):")
+            print(f"  Accuracy:  {stat_accuracy:.2%}")
+            print(f"  Precision: {stat_precision:.2%}")
+            print(f"  Recall:    {stat_recall:.2%}")
+            print(f"  F1-Score:  {stat_f1:.2%}")
+            
+            print(f"\nXGBOOST ENHANCED MODEL (11 features):")
+            print(f"  Accuracy:  {ml_accuracy:.2%}")
+            print(f"  Precision: {ml_precision:.2%}")
+            print(f"  Recall:    {ml_recall:.2%}")
+            print(f"  F1-Score:  {ml_f1:.2%}")
+            
+            print(f"\n{'='*60}")
+            print(f"IMPROVEMENT: {improvement:+.2f}%")
+            print(f"CONCLUSION: XGBoost {'ENHANCES' if improvement > 0 else 'DOES NOT ENHANCE'} the strategy")
+            print(f"{'='*60}")
+            
+            # Feature importance
+            feature_importance = pd.DataFrame({
+                'Feature': feature_cols,
+                'Importance': model.feature_importances_
+            }).sort_values('Importance', ascending=False)
+            
+            print(f"\nTop 5 Most Important Features:")
+            for idx, row in feature_importance.head(5).iterrows():
+                print(f"  {row['Feature']}: {row['Importance']:.4f}")
+            
+            # Save detailed results
+            results = {
+                'Pair': name,
+                'Stock_A': syms[0],
+                'Stock_B': syms[1],
+                'Data_Points': len(df_clean),
+                'Test_Period_Days': len(test_data),
+                'Cointegration_PValue': p_val,
+                'Is_Cointegrated': is_cointegrated,
+                'Stat_Accuracy': stat_accuracy,
+                'Stat_Precision': stat_precision,
+                'Stat_F1': stat_f1,
+                'ML_Accuracy': ml_accuracy,
+                'ML_Precision': ml_precision,
+                'ML_F1': ml_f1,
+                'Improvement_Percent': improvement,
+                'Top_Feature': feature_importance.iloc[0]['Feature']
+            }
+            all_results.append(results)
+            
+            # 10. Save summary to file
+            with open(f"results/data/{name}_summary.txt", 'w') as f:
+                f.write(f"PAIRS TRADING ANALYSIS: {name}\n")
+                f.write(f"="*50 + "\n\n")
+                f.write(f"Stocks: {syms[0]} vs {syms[1]}\n")
+                f.write(f"Data points: {len(df_clean)}\n")
+                f.write(f"Test period: {len(test_data)} days\n\n")
+                
+                f.write(f"COINTEGRATION TEST:\n")
+                f.write(f"  Test Statistic: {score:.4f}\n")
+                f.write(f"  P-value: {p_val:.4f}\n")
+                f.write(f"  Cointegrated: {is_cointegrated}\n\n")
+                
+                f.write(f"STATISTICAL BASELINE:\n")
+                f.write(f"  Accuracy:  {stat_accuracy:.2%}\n")
+                f.write(f"  Precision: {stat_precision:.2%}\n")
+                f.write(f"  F1-Score:  {stat_f1:.2%}\n\n")
+                
+                f.write(f"XGBOOST ENHANCED (11 features):\n")
+                f.write(f"  Accuracy:  {ml_accuracy:.2%}\n")
+                f.write(f"  Precision: {ml_precision:.2%}\n")
+                f.write(f"  F1-Score:  {ml_f1:.2%}\n\n")
+                
+                f.write(f"IMPROVEMENT: {improvement:+.2f}%\n\n")
+                
+                f.write(f"FEATURE IMPORTANCE:\n")
+                for idx, row in feature_importance.iterrows():
+                    f.write(f"  {row['Feature']}: {row['Importance']:.4f}\n")
+                
+                f.write(f"\nCONCLUSION:\n")
+                f.write(f"XGBoost {'ENHANCES' if improvement > 0 else 'DOES NOT ENHANCE'} ")
+                f.write(f"the predictive power of the statistical cointegration strategy.\n")
+                f.write(f"The most important feature for prediction is: {feature_importance.iloc[0]['Feature']}\n")
+            
+            # 11. Save detailed data
+            test_data_export = test_data.copy()
+            test_data_export['ML_Prediction'] = y_pred_ml
+            test_data_export['Stat_Prediction'] = y_pred_stat
+            test_data_export.to_csv(f"results/data/{name}_detailed_results.csv")
+            
+            # Save feature importance
+            feature_importance.to_csv(f"results/data/{name}_feature_importance.csv", index=False)
+            
+            # 12. Create visualization
+            fig = plt.figure(figsize=(14, 10))
+            gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
+            
+            # Plot 1: Z-Score with signals
+            ax1 = fig.add_subplot(gs[0, :])
+            ax1.plot(df_clean.index, df_clean['Z_Score'], label='Z-Score', color='blue', alpha=0.7, linewidth=1)
+            ax1.axhline(2, color='red', ls='--', label='Traditional Threshold (+2)', alpha=0.5)
+            ax1.axhline(-2, color='green', ls='--', label='Traditional Threshold (-2)', alpha=0.5)
+            ax1.axhline(0, color='black', ls='-', alpha=0.3)
+            ax1.set_title(f"{name} Pair ({syms[0]}/{syms[1]}): Mean Reversion Signal", fontsize=14, fontweight='bold')
+            ax1.set_ylabel('Z-Score', fontsize=11)
+            ax1.legend(loc='upper right')
+            ax1.grid(True, alpha=0.3)
+            
+            # Plot 2: Performance comparison
+            ax2 = fig.add_subplot(gs[1, 0])
+            metrics = ['Accuracy', 'Precision', 'F1-Score']
+            stat_scores = [stat_accuracy, stat_precision, stat_f1]
+            ml_scores = [ml_accuracy, ml_precision, ml_f1]
+            
+            x = np.arange(len(metrics))
+            width = 0.35
+            
+            bars1 = ax2.bar(x - width/2, stat_scores, width, label='Statistical', color='#FF6B6B', alpha=0.8)
+            bars2 = ax2.bar(x + width/2, ml_scores, width, label='XGBoost', color='#4ECDC4', alpha=0.8)
+            
+            ax2.set_ylabel('Score', fontsize=11)
+            ax2.set_title(f'Performance Comparison\nImprovement: {improvement:+.1f}%', fontsize=12, fontweight='bold')
+            ax2.set_xticks(x)
+            ax2.set_xticklabels(metrics, fontsize=10)
+            ax2.legend()
+            ax2.grid(True, alpha=0.3, axis='y')
+            ax2.set_ylim(0, 1)
+            
+            # Add value labels
+            for bars in [bars1, bars2]:
+                for bar in bars:
+                    height = bar.get_height()
+                    ax2.text(bar.get_x() + bar.get_width()/2., height,
+                           f'{height:.1%}', ha='center', va='bottom', fontsize=8)
+            
+            # Plot 3: Feature Importance
+            ax3 = fig.add_subplot(gs[1, 1])
+            top_features = feature_importance.head(8)
+            ax3.barh(range(len(top_features)), top_features['Importance'], color='#95E1D3')
+            ax3.set_yticks(range(len(top_features)))
+            ax3.set_yticklabels(top_features['Feature'], fontsize=9)
+            ax3.set_xlabel('Importance', fontsize=10)
+            ax3.set_title('Top 8 Feature Importance', fontsize=12, fontweight='bold')
+            ax3.grid(True, alpha=0.3, axis='x')
+            
+            # Plot 4: Prediction Distribution
+            ax4 = fig.add_subplot(gs[2, :])
+            test_dates = test_data.index
+            ax4.scatter(test_dates[y_pred_ml == 1], [1]*sum(y_pred_ml), 
+                       label='ML Predicted Trade', color='#4ECDC4', alpha=0.6, s=20)
+            ax4.scatter(test_dates[y_pred_stat == 1], [0]*sum(y_pred_stat), 
+                       label='Statistical Predicted Trade', color='#FF6B6B', alpha=0.6, s=20)
+            ax4.scatter(test_dates[y_test == 1], [-1]*sum(y_test), 
+                       label='Actual Profitable', color='gold', alpha=0.8, s=30, marker='*')
+            ax4.set_yticks([1, 0, -1])
+            ax4.set_yticklabels(['ML', 'Statistical', 'Actual'])
+            ax4.set_title('Trading Signals Over Time (Test Period)', fontsize=12, fontweight='bold')
+            ax4.legend(loc='upper right', fontsize=9)
+            ax4.grid(True, alpha=0.3)
+            
+            plt.savefig(f"results/plots/{name}_comprehensive_analysis.png", dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"\n✓ Saved comprehensive plot: results/plots/{name}_comprehensive_analysis.png")
+            
+        except Exception as e:
+            print(f"\n❌ ERROR processing {name}: {e}")
+            import traceback
+            traceback.print_exc()
     
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print(f"\n{'='*80}")
-    print("FINAL SUMMARY")
-    print('='*80)
-    
-    summary_df = pd.DataFrame(all_results)
-    summary_df.to_csv(f"{Config.DATA_DIR}/overall_summary.csv", index=False)
-    
-    print(f"\n{summary_df.to_string(index=False)}")
-    
-    avg_improvement = summary_df['Improvement_Percent'].mean()
-    print(f"\n{'='*80}")
-    print(f"AVERAGE IMPROVEMENT ACROSS ALL PAIRS: {avg_improvement:+.2f}%")
-    print(f"{'='*80}")
-    
-    # Generate final report
-    with open(f"{Config.REPORT_DIR}/executive_summary.txt", 'w') as f:
-        f.write("CS HL EXTENDED ESSAY - EXECUTIVE SUMMARY\n")
-        f.write("="*70 + "\n\n")
-        f.write("Research Question:\n")
-        f.write("To what extent does XGBoost enhance the predictive power of\n")
-        f.write("statistical cointegration-based pairs trading systems?\n\n")
+    # Save overall summary
+    if all_results:
+        summary_df = pd.DataFrame(all_results)
+        summary_df.to_csv("results/data/overall_summary.csv", index=False)
         
-        f.write("="*70 + "\n")
-        f.write("KEY FINDINGS\n")
-        f.write("="*70 + "\n\n")
+        print(f"\n\n{'='*60}")
+        print("OVERALL SUMMARY")
+        print('='*60)
+        print(summary_df.to_string(index=False))
+        print(f"\n✓ Saved to results/data/overall_summary.csv")
         
-        f.write(f"1. Average Improvement: {avg_improvement:+.2f}%\n\n")
-        
-        f.write("2. Pair-by-Pair Results:\n")
-        for _, row in summary_df.iterrows():
-            f.write(f"\n   {row['Pair']} ({row['Stock_A']}/{row['Stock_B']}):\n")
-            f.write(f"   - Baseline: {row['Baseline_Accuracy']:.2%} accuracy\n")
-            f.write(f"   - ML Enhanced: {row['ML_Accuracy']:.2%} accuracy\n")
-            f.write(f"   - Improvement: {row['Improvement_Percent']:+.2f}%\n")
-            f.write(f"   - Top Feature: {row['Top_Feature']}\n")
-        
-        f.write("\n" + "="*70 + "\n")
-        f.write("CONCLUSION\n")
-        f.write("="*70 + "\n\n")
-        
-        if avg_improvement > 0:
-            f.write("XGBoost SUCCESSFULLY ENHANCES the predictive power of\n")
-            f.write("statistical pairs trading strategies.\n\n")
-            f.write("The machine learning approach demonstrates superior performance\n")
-            f.write("by leveraging multiple features and capturing non-linear patterns\n")
-            f.write("that simple threshold-based strategies cannot detect.\n")
-        else:
-            f.write("XGBoost did not enhance the baseline strategy.\n")
-            f.write("Further investigation needed.\n")
-    
-    print(f"\n✓ All results saved to: {Config.OUTPUT_DIR}/")
-    print(f"✓ Executive summary: {Config.REPORT_DIR}/executive_summary.txt")
-
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
+        avg_improvement = summary_df['Improvement_Percent'].mean()
+        print(f"\n{'='*60}")
+        print(f"AVERAGE IMPROVEMENT ACROSS ALL PAIRS: {avg_improvement:+.2f}%")
+        print(f"{'='*60}")
 
 if __name__ == "__main__":
-    start_time = time.time()
-    
-    print("\n" + "="*80)
-    print("CS HL EXTENDED ESSAY")
-    print("Machine Learning Enhancement of Pairs Trading Systems")
-    print("="*80)
-    
-    run_analysis()
-    
-    elapsed = time.time() - start_time
-    print(f"\n{'='*80}")
-    print(f"ANALYSIS COMPLETE - Total time: {elapsed:.2f} seconds")
-    print(f"{'='*80}\n")
+    try:
+        print("=" * 60)
+        print("SCRIPT STARTED")
+        print("=" * 60)
+        run()
+        print("\n" + "=" * 60)
+        print("SCRIPT COMPLETED SUCCESSFULLY")
+        print("=" * 60)
+    except Exception as e:
+        print("\n" + "=" * 60)
+        print("FATAL ERROR:")
+        print(str(e))
+        print("=" * 60)
+        import traceback
