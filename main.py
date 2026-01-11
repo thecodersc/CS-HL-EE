@@ -417,3 +417,12 @@ if __name__ == "__main__":
         run()
         print("\n" + "=" * 60)
         print("SCRIPT COMPLETED SUCCESSFULLY")
+        print("=" * 60)
+    except Exception as e:
+        print("\n" + "=" * 60)
+        print("FATAL ERROR:")
+        print(str(e))
+        print("=" * 60)
+        import traceback
+        traceback.print_exc()
+        raise
